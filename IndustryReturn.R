@@ -1,6 +1,5 @@
 # Industry Return
 
-options(java.parameters="-Xmx8g")
 source('D:/working/R/MyFunction.R')
 library("dplyr", lib.loc="~/R/win-library/3.1")
 library("RMySQL", lib.loc="~/R/win-library/3.1")
@@ -18,8 +17,7 @@ nIndexCode <- 4982  # 确认市场指数， 全流通 4088，中证500 4978， �
 
 ########################################################################################################
 #  确定交易时间和周期, 先尝试周度
-
-startdate <- as.Date("2000-01-1")
+startdate <- as.Date("2007-01-15")
 enddate <- as.Date("2015-6-29")
 
 trading_date <- data$TradingDay %>%
@@ -29,6 +27,45 @@ trading_date <- data$TradingDay %>%
   rename(End =  TradingDate) %>%
   select(Start, End) %>%
   na.omit()
+
+#######################################################################################
+# 用日度收益率试一下与现有行业指数的相关性
+
+industry_return_daily <- data$ReturnDaily %>%
+  inner_join(data$IndexComponent %>% filter(IndexInnerCode == nIndexCode),
+          by = c("InnerCode" = "SecuInnerCode")) %>%
+  filter(TradingDay >= InDate & TradingDay < OutDate) %>% # 选成分股
+  group_by(InnerCode) %>%
+  arrange(TradingDay) %>%
+  mutate(LagFloatMarketCap = lag(FloatMarketCap, 1)) %>%
+  filter(!is.na(LagFloatMarketCap)) %>%
+  group_by(IndustryNameNew, IndustryCodeNew, TradingDay) %>%
+  summarise(IndustryReturn = weighted.mean(DailyReturn, sqrt(LagFloatMarketCap))) %>%
+  ungroup()
+  
+data$IndexQuote <- data$IndexQuote %>% 
+  group_by(InnerCode) %>% 
+  arrange(TradingDay) %>% 
+  mutate(Lag = lag(ClosePrice)) %>% 
+  mutate(Return = ClosePrice/Lag - 1) %>% 
+  ungroup() %>%
+  na.omit()  
+
+
+#与现有行业指数比较日度收益率
+
+corralation_daily <- industry_return_daily %>%
+  mutate(IndustryCodeNew = as.numeric(IndustryCodeNew)) %>%
+  inner_join(data$CorrIndexIndustry %>% filter(IndustryStandard == 24) %>% select(IndexCode, IndustryCode), 
+            by = c("IndustryCodeNew" = "IndustryCode")) %>%
+  inner_join(data$IndexQuote %>% select(InnerCode, TradingDay, Return), 
+             by = c("IndexCode" = "InnerCode", "TradingDay")) %>%
+  group_by(TradingDay) %>%
+  mutate(IndustryMinusMean = IndustryReturn - mean(IndustryReturn),
+         IndexMinusMean = Return - mean(Return)) %>%
+  group_by(IndustryNameNew) %>%
+  summarise(Corralation = cor(IndustryMinusMean, IndexMinusMean)) %>%
+  arrange(Corralation)
 
 #######################################################################################################
 # 计算各行业周度收益率, 应该计算每周五的股票，以周五的流通市值计算下周的收益率
@@ -62,7 +99,7 @@ for(i in c(1:nrow(trading_date))){
 industry_return <- industry_return %>%
   group_by(IndustryCodeNew) %>%
   arrange(ReturnLastDate) %>%
-  mutate(IndustryWeeklyCumulateReturn = expm1(cumsum(log1p(IndustryWeeklyReturn))))
+  mutate(IndustryWeeklyCumulateReturn =  expm1(cumsum(log1p(IndustryWeeklyReturn))))
 
 cumulate_return_plot <- ggplot(industry_return, aes(x = ReturnLastDate, y = IndustryWeeklyCumulateReturn, colour = IndustryNameNew)) +
   geom_line() + xlab(NULL) + ylab(NULL) + ggtitle("Industry Weekly Cumulate Return")
@@ -84,7 +121,7 @@ ggplot(temp, aes(x = IndustryNameNew, y = value)) + geom_bar(stat = "identity", 
 qplot(IndustryNameNew, IndustryWeeklyReturn, data = industry_return, geom = "boxplot") + xlab(NULL)
 
 #
-#与现有行业指数比较周度收益率
+# 与现有行业指数比较周度收益率
 
 corralation <- industry_return %>%
   ungroup() %>%
@@ -109,44 +146,16 @@ ggplot(industry_return, aes(x = IndustryNameNew))+ geom_boxplot(aes(y = Count))+
 industry_corralation <- industry_return %>%
   group_by(ReturnLastDate) %>%
   mutate(ReturnMinusMean = IndustryWeeklyReturn - mean(IndustryWeeklyReturn)) %>%
-  dcast(ReturnLastDate ~ IndustryNameNew, value.var = "ReturnMinusMean") %>% 
-  select(-ReturnLastDate) %>%
-  cor(use = "na.or.complete")
+  dcast(ReturnLastDate ~ IndustryNameNew, value.var = "ReturnMinusMean") 
+industry_corralation <- as.data.frame(cor(industry_corralation[, -1], use = "na.or.complete"))
+
+IndustryName <- names(industry_corralation)
+a <- cbind(IndustryName, industry_corralation) %>%
+  melt(id.var = "IndustryName")
+ggplot(a , aes(IndustryName, variable, fill = value))+ geom_tile()
 
 #######################################################################################################
 
-# 周度计算行业的EP
-
-industry_ep <- data.frame()
-for(i in c(1:nrow(trading_date))){
-  date <- trading_date[[i, 1]]
-  temp <- data$ReturnDaily %>%
-    filter(TradingDay == date) %>% # 筛选日期
-    semi_join(data$IndexComponent %>% 
-                filter(IndexInnerCode == nIndexCode, date >= InDate & date < OutDate),
-              by = c("InnerCode" = "SecuInnerCode")) %>%  # 挑出成分股
-    mutate(Date = date) 
-  
-  industry_ep_temp <- temp %>%
-    inner_join(data$NetProfit %>% filter(DataDate == date, !is.na(NPParentCompanyOwners)),
-               by = c("SecuCode" = "SecuCode", "TradingDay" = "DataDate")) %>%
-    filter(NPParentCompanyOwners > 0 ) %>%
-    mutate(EPS = NPParentCompanyOwners/MarketCap) %>%
-    filter(!is.na(IndustryNameNew)) %>%
-    group_by(Date, IndustryNameNew) %>%
-    summarise(EP = weighted.mean(EPS, FloatMarketCap)) %>%
-    ungroup()
-  
-  industry_ep <- rbind(industry_ep, industry_ep_temp)
-}
-
-summary_industry_ep <- industry_ep %>%
-  group_by(IndustryNameNew) %>%
-  summarise(Max = max(EP), Min = min(EP), Mean = mean(EP))
-
-ggplot(industry_ep, aes(x = IndustryNameNew))+ geom_boxplot(aes(y = EP)) + xlab(NULL)
-
- 
 #############################################################################################
  data$ForwardEPS$CON_DATE <- as.Date( data$ForwardEPS$CON_DATE)
 
