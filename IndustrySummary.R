@@ -3,6 +3,7 @@ portfolio_return <- portfolio %>%
   summarise(Return = mean(IndustryReturn)) %>%
   ungroup()
 
+portfolio_date <- unique(portfolio_return %>% select(End))
 p1 <- portfolio_return %>% 
   rbind(index_weekly_return %>% select(End = End, Order = Name,  Return = WeeklyReturn) %>% 
           filter(End >= portfolio_date$End[1] & End <= portfolio_date$End[length(portfolio_date$End)])) 
@@ -22,8 +23,8 @@ print(year_performance)
 p2 <-  portfolio_return %>% 
   left_join(index_weekly_return %>% filter(InnerCode == 3145) %>% select(End, WeeklyReturn), by = "End") %>%
   rename(CSI300 = WeeklyReturn) %>%
-  left_join(index_weekly_return %>% filter(InnerCode == 4982) %>% select(End, WeeklyReturn), by = "End") %>%
-  rename(CSI500 = WeeklyReturn) 
+  left_join(index_weekly_return %>% filter(InnerCode == 4978) %>% select(End, WeeklyReturn), by = "End") %>%
+  rename(CSI500 = WeeklyReturn)
 
 portfolio_diff_index <- p2 %>%
   mutate(CSI300 = Return - CSI300, CSI500 = Return - CSI500) %>% 
@@ -43,8 +44,8 @@ print(ggplot(portfolio_diff_index, aes(x = End, y= value, color = Order)) +
 
 p3 <- portfolio_return %>%
   dcast(End ~ Order, value.var = "Return") %>% 
-  mutate(FirstMinusFifth = First - Fifth,
-         SecondMinusFourth = Second - Fourth) %>% 
+  mutate(FirstMinusFifth = First - Fourth,
+         SecondMinusFourth = Second - Third) %>% 
   select(End, FirstMinusFifth, SecondMinusFourth) %>%
   melt(id = "End")
 
